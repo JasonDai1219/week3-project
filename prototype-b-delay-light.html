@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Delay Light — AI Edition</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --asphalt:#15141c; --steel:#25233a; --ink:#f2ede4; --ink-dim:#8d8a9a;
+    --green:#5fbf6a; --amber:#e0a83a; --red:#e0553a; --ai:#9d8cf0;
+    --glow: var(--green);
+  }
+  * { box-sizing:border-box; }
+  html, body { margin:0; height:100%; background:var(--asphalt); color:var(--ink);
+    font-family:'Space Grotesk', sans-serif; }
+  .ribbon { background: linear-gradient(90deg, #6a5cd9, #9d8cf0); color:#fff;
+    text-align:center; font-size:12px; padding:6px; letter-spacing:.02em; }
+  .stage { min-height:calc(100vh - 30px); display:flex; flex-direction:column; align-items:center; justify-content:center; padding:40px 24px; text-align:center; }
+  .tag { font-size:13px; color:var(--ink-dim); margin-bottom:10px; }
+  .badge { font-size:11px; padding:4px 10px; border-radius:999px; border:1px solid #45473f; color:var(--ink-dim); margin-bottom:34px; }
+  .badge.live { border-color:#5b8c5a; color:#8fc98d; }
+  .badge.demo { border-color:#8c6a2c; color:#d9a24a; }
+
+  .sign {
+    width: 280px;
+    background: var(--steel);
+    border-radius: 14px;
+    padding: 32px 24px 26px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+    position: relative;
+  }
+  .sign::before{
+    content:'';
+    position:absolute; top:-46px; left:50%; transform:translateX(-50%);
+    width:8px; height:50px; background:#3a3c40; border-radius:4px;
+  }
+  .light {
+    width: 46px; height: 46px; border-radius: 50%;
+    background: var(--glow);
+    margin: 0 auto 22px;
+    box-shadow: 0 0 0px var(--glow);
+    transition: background 0.6s ease, box-shadow 0.6s ease;
+  }
+  .light.pulse { animation: glow 1s ease-in-out infinite; }
+  @keyframes glow {
+    0%,100% { box-shadow: 0 0 8px 2px var(--glow); }
+    50%     { box-shadow: 0 0 26px 10px var(--glow); }
+  }
+  .route-label { font-size:12px; color:var(--ink-dim); margin-bottom:4px; }
+  .headline { font-size:19px; font-weight:500; line-height:1.35; min-height:52px; }
+  .sub { font-size:13px; color:var(--ink-dim); margin-top:10px; line-height:1.5; min-height: 20px; }
+  .sub.ai { color:#c9bfff; }
+  .sub.ai::before { content:'✦ '; }
+
+  .ai-btn {
+    margin-top: 18px;
+    background: transparent;
+    border: 1px solid #4c477a;
+    color: #c9bfff;
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 13px;
+    padding: 9px 18px;
+    border-radius: 999px;
+    cursor: pointer;
+    transition: border-color .2s ease, background .2s ease;
+  }
+  .ai-btn:hover:not(:disabled) { border-color: var(--ai); background: rgba(157,140,240,0.12); }
+  .ai-btn:disabled { opacity: 0.4; cursor: default; }
+
+  footer { margin-top:30px; font-size:11.5px; color:#565952; max-width:340px; }
+</style>
+</head>
+<body>
+<div class="ribbon">WEEK 3 · AI-Enhanced Edition</div>
+<div class="stage">
+  <div class="tag">Street Interface · Prototype B</div>
+  <div class="badge" id="badge">Connecting to SEPTA…</div>
+
+  <div class="sign">
+    <div class="route-label">SEPTA Route 42 · 34th &amp; Walnut</div>
+    <div class="light" id="light"></div>
+    <div class="headline" id="headline">Checking status…</div>
+    <div class="sub" id="sub">&nbsp;</div>
+    <button class="ai-btn" id="aiBtn" style="display:none">Ask AI why ✦</button>
+  </div>
+
+  <footer>Press the button to have Claude infer a likely reason for the delay from the live data — it's not a fixed message, it reasons about it each time.</footer>
+</div>
+
+<script>
+  const ROUTE = '42';
+  const STOP = { lat: 39.9527, lng: -75.1932 };
+  const AVG_SPEED_KMH = 14;
+  const POLL_MS = 15000;
+
+  const lightEl = document.getElementById('light');
+  const headlineEl = document.getElementById('headline');
+  const subEl = document.getElementById('sub');
+  const badgeEl = document.getElementById('badge');
+  const aiBtn = document.getElementById('aiBtn');
+  const root = document.documentElement;
+
+  // latest known values, so the AI button can use them when clicked
+  let lastMinutes = null;
+  let lastLateMin = 0;
+  let defaultSub = '';
+
+  function haversineKm(lat1, lon1, lat2, lon2){
+    const R = 6371, toRad = d => d * Math.PI / 180;
+    const dLat = toRad(lat2-lat1), dLon = toRad(lon2-lon1);
+    const a = Math.sin(dLat/2)**2 + Math.cos(toRad(lat1))*Math.cos(toRad(lat2))*Math.sin(dLon/2)**2;
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  }
+
+  function render(minutes, lateMin, demo){
+    let color, pulsing, headline, sub;
+    lastMinutes = minutes;
+    lastLateMin = lateMin;
+
+    if (minutes === null){
+      color = '#6b6d70'; pulsing = false;
+      headline = 'No live buses on this route right now';
+      sub = 'Check back later, or the route may not be running.';
+    } else if (minutes <= 1.5){
+      color = 'var(--red)'; pulsing = true;
+      headline = 'Arriving now — head to the stop';
+      sub = 'The bus is right around the corner.';
+    } else if (lateMin >= 3){
+      color = 'var(--amber)'; pulsing = false;
+      headline = `Running about ${Math.round(lateMin)} min behind`;
+      sub = 'Tap below to have AI reason about why.';
+    } else {
+      color = 'var(--green)'; pulsing = false;
+      headline = `On schedule — ${minutes.toFixed(1)} min away`;
+      sub = 'No delays reported on this route.';
+    }
+    root.style.setProperty('--glow', color);
+    lightEl.classList.toggle('pulse', pulsing);
+    headlineEl.textContent = headline + (demo ? ' (demo)' : '');
+    defaultSub = sub;
+    subEl.textContent = sub;
+    subEl.className = 'sub';
+
+    // Only offer the AI explanation when there's an actual delay worth explaining
+    aiBtn.style.display = (lateMin >= 3 && minutes !== null) ? 'inline-block' : 'none';
+    aiBtn.disabled = false;
+    aiBtn.textContent = 'Ask AI why ✦';
+  }
+
+  let demoMinutes = 9, demoDir = -1;
+
+  async function poll(){
+    try{
+      const res = await fetch(`/api/septa?route=${ROUTE}`, { cache:'no-store' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const data = await res.json();
+      const buses = data.bus || [];
+      if (!buses.length){
+        badgeEl.textContent = 'Live feed: no buses running now';
+        badgeEl.className = 'badge demo';
+        render(null, 0, false);
+        return;
+      }
+      let best = null, bestDist = Infinity;
+      buses.forEach(b => {
+        const d = haversineKm(parseFloat(b.lat), parseFloat(b.lng), STOP.lat, STOP.lng);
+        if (d < bestDist){ bestDist = d; best = b; }
+      });
+      const minutes = Math.max(0, (bestDist / AVG_SPEED_KMH) * 60);
+      const lateMin = best.late ? parseFloat(best.late) : (best.Offset ? parseFloat(best.Offset) : 0);
+      badgeEl.textContent = 'Live SEPTA data · Route ' + ROUTE;
+      badgeEl.className = 'badge live';
+      render(minutes, lateMin, false);
+    } catch (err) {
+      badgeEl.textContent = 'Demo data — live feed unavailable';
+      badgeEl.className = 'badge demo';
+      demoMinutes += demoDir * 0.6;
+      if (demoMinutes <= 0){ demoMinutes = 0; demoDir = 1; }
+      if (demoMinutes >= 9){ demoMinutes = 9; demoDir = -1; }
+      render(demoMinutes, demoMinutes < 4 ? 4 : 0, true);
+    }
+  }
+  poll();
+  setInterval(poll, POLL_MS);
+
+  // --- AI button: manual trigger, so YOU control exactly when it costs money ---
+  aiBtn.addEventListener('click', async () => {
+    aiBtn.disabled = true;
+    aiBtn.textContent = 'Thinking…';
+    subEl.textContent = 'Asking Claude…';
+    subEl.className = 'sub';
+
+    const now = new Date();
+
+    try {
+      const res = await fetch('/api/delay-reason', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          lateMinutes: Math.round(lastLateMin),
+          hour: now.getHours(),
+          dayOfWeek: now.toLocaleDateString('en-US', { weekday: 'long' }),
+          route: ROUTE
+        })
+      });
+
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const data = await res.json();
+
+      subEl.textContent = data.reason || defaultSub;
+      subEl.className = 'sub ai';
+    } catch (err) {
+      subEl.textContent = 'Could not reach AI — try again in a moment.';
+      subEl.className = 'sub';
+    } finally {
+      aiBtn.disabled = false;
+      aiBtn.textContent = 'Ask again ✦';
+    }
+  });
+</script>
+</body>
+</html>
