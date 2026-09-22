@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Heartbeat Bench — Live</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --asphalt: #1c1e21;
+    --wood: #c98a4b;
+    --wood-dark: #8c5a2c;
+    --pulse: #e8593c;
+    --ink: #f2ede4;
+    --ink-dim: #918c82;
+    --dur: 3.2s;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin:0; height:100%; background:var(--asphalt);
+    background-image: radial-gradient(ellipse 900px 500px at 50% 20%, #2a2c30 0%, var(--asphalt) 70%);
+    color:var(--ink); font-family:'Space Grotesk', sans-serif; overflow-x:hidden; }
+  .stage { min-height:100vh; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:48px 24px 32px; text-align:center; }
+  .tag { font-size:13px; color:var(--ink-dim); margin-bottom:10px; }
+  .badge { font-size:11px; padding:4px 10px; border-radius:999px; border:1px solid #45473f; color:var(--ink-dim); margin-bottom:30px; }
+  .badge.live { border-color:#5b8c5a; color:#8fc98d; }
+  .badge.demo { border-color:#8c6a2c; color:#d9a24a; }
+  .bench-wrap { position:relative; width:320px; height:320px; display:flex; align-items:center; justify-content:center; }
+  .ring { position:absolute; border-radius:50%; border:1.5px solid var(--pulse); opacity:0; animation:pulse-ring var(--dur) ease-out infinite; }
+  .ring:nth-child(1){ animation-delay:0s; } .ring:nth-child(2){ animation-delay:calc(var(--dur)/3); } .ring:nth-child(3){ animation-delay:calc(var(--dur)/3*2); }
+  @keyframes pulse-ring { 0%{width:90px;height:90px;opacity:.55;} 100%{width:300px;height:300px;opacity:0;} }
+  .bench-svg { position:relative; z-index:2; animation:shake var(--dur) ease-in-out infinite; transform-origin:50% 85%; }
+  @keyframes shake { 0%,100%{transform:translateX(0) rotate(0);} 25%{transform:translateX(calc(-1px*var(--amp,0))) rotate(calc(-0.15deg*var(--amp,0)));} 50%{transform:translateX(0) rotate(0);} 75%{transform:translateX(calc(1px*var(--amp,0))) rotate(calc(0.15deg*var(--amp,0)));} }
+  .status { margin-top:44px; display:flex; flex-direction:column; align-items:center; gap:10px; }
+  .countdown { font-weight:500; font-size:44px; letter-spacing:-0.01em; font-variant-numeric:tabular-nums; }
+  .countdown .unit { font-size:18px; color:var(--ink-dim); margin-left:6px; font-weight:400; }
+  .intensity { font-size:15px; color:var(--pulse); transition:color .4s ease; }
+  .intensity.calm { color:var(--ink-dim); }
+  .caption { max-width:380px; margin-top:22px; font-size:13px; line-height:1.7; color:var(--ink-dim); }
+  footer { margin-top:30px; font-size:11.5px; color:#565952; }
+</style>
+</head>
+<body>
+<div class="stage">
+  <div class="tag">Street Interface · Prototype A</div>
+  <div class="badge" id="badge">Connecting to SEPTA…</div>
+
+  <div class="bench-wrap">
+    <div class="ring"></div><div class="ring"></div><div class="ring"></div>
+    <svg class="bench-svg" width="200" height="140" viewBox="0 0 200 140">
+      <rect x="30" y="55" width="140" height="16" rx="4" fill="var(--wood)"/>
+      <rect x="30" y="80" width="140" height="10" rx="3" fill="var(--wood-dark)"/>
+      <rect x="42" y="90" width="10" height="34" fill="#3a3c3f"/>
+      <rect x="148" y="90" width="10" height="34" fill="#3a3c3f"/>
+      <rect x="20" y="120" width="160" height="6" rx="2" fill="#0f1012"/>
+    </svg>
+  </div>
+
+  <div class="status">
+    <div class="countdown" id="countdown">— <span class="unit">min until arrival</span></div>
+    <div class="intensity calm" id="intensity">Bench at rest</div>
+  </div>
+
+  <p class="caption">Route 42 near 34th &amp; Walnut St. The bench vibrates harder the closer the real bus gets — no screen to check.</p>
+  <footer id="footer">Week 2 · live SEPTA TransitView data</footer>
+</div>
+
+<script>
+  const ROUTE = '42';
+  const STOP = { lat: 39.9527, lng: -75.1932 }; // 34th & Walnut St, Philadelphia
+  const AVG_SPEED_KMH = 14; // assumed average city-bus speed incl. stops
+  const POLL_MS = 15000;
+
+  const root = document.documentElement;
+  const countdownEl = document.getElementById('countdown');
+  const intensityEl = document.getElementById('intensity');
+  const badgeEl = document.getElementById('badge');
+
+  function haversineKm(lat1, lon1, lat2, lon2){
+    const R = 6371, toRad = d => d * Math.PI / 180;
+    const dLat = toRad(lat2 - lat1), dLon = toRad(lon2 - lon1);
+    const a = Math.sin(dLat/2)**2 + Math.cos(toRad(lat1))*Math.cos(toRad(lat2))*Math.sin(dLon/2)**2;
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  }
+
+  let liveMinutes = null;   // null = no live value yet
+  let demoMinutes = 12;     // fallback demo countdown
+  let demoDir = -1;
+
+  async function pollLive(){
+    try{
+      const res = await fetch(`/api/septa?route=${ROUTE}`, { cache: 'no-store' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const data = await res.json();
+      const buses = data.bus || [];
+      if (!buses.length){
+        liveMinutes = null;
+        badgeEl.textContent = 'Live feed: no buses running now';
+        badgeEl.className = 'badge demo';
+        return;
+      }
+      let best = null, bestDist = Infinity;
+      buses.forEach(b => {
+        const d = haversineKm(parseFloat(b.lat), parseFloat(b.lng), STOP.lat, STOP.lng);
+        if (d < bestDist){ bestDist = d; best = b; }
+      });
+      liveMinutes = Math.max(0, (bestDist / AVG_SPEED_KMH) * 60);
+      badgeEl.textContent = 'Live SEPTA data · Route ' + ROUTE;
+      badgeEl.className = 'badge live';
+    } catch (err) {
+      liveMinutes = null;
+      badgeEl.textContent = 'Demo data — live feed unavailable';
+      badgeEl.className = 'badge demo';
+    }
+  }
+  pollLive();
+  setInterval(pollLive, POLL_MS);
+
+  function stateFor(minLeft){
+    if (minLeft > 8)  return { amp:0,   dur:3.2, label:'Bench at rest' };
+    if (minLeft > 4)  return { amp:2.5, dur:2.2, label:'Light vibration' };
+    if (minLeft > 1)  return { amp:5,   dur:1.2, label:'Getting stronger' };
+    return               { amp:8,   dur:0.6, label:'Peak vibration · arriving' };
+  }
+
+  function tick(){
+    let minLeft;
+    if (liveMinutes !== null){
+      minLeft = liveMinutes;
+    } else {
+      demoMinutes += demoDir * 0.02;
+      if (demoMinutes <= 0){ demoMinutes = 0; demoDir = 1; }
+      if (demoMinutes >= 12){ demoMinutes = 12; demoDir = -1; }
+      minLeft = demoMinutes;
+    }
+    const s = stateFor(minLeft);
+    root.style.setProperty('--amp', s.amp);
+    root.style.setProperty('--dur', s.dur + 's');
+    intensityEl.textContent = s.label;
+    intensityEl.className = 'intensity' + (s.amp === 0 ? ' calm' : '');
+    countdownEl.innerHTML = minLeft < 0.5
+      ? '0<span class="unit">min · hop on</span>'
+      : minLeft.toFixed(1) + '<span class="unit">min until arrival</span>';
+    requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+</script>
+</body>
+</html>

@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Weather Advisor — Live</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --sky-day:#3a6ea5; --sky-rain:#39434f; --sky-clear:#4a7fb8;
+    --ink:#f4f7fb; --ink-dim:#b7c4d4; --panel:#22262c;
+  }
+  * { box-sizing:border-box; }
+  html, body { margin:0; height:100%; color:var(--ink); font-family:'Space Grotesk', sans-serif;
+    background: linear-gradient(180deg, var(--sky-clear) 0%, #16191d 78%); transition: background 1s ease; }
+  .stage { min-height:100vh; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:40px 24px; text-align:center; }
+  .tag { font-size:13px; color:var(--ink-dim); margin-bottom:10px; opacity:.85; }
+  .badge { font-size:11px; padding:4px 10px; border-radius:999px; border:1px solid rgba(255,255,255,0.25); color:var(--ink-dim); margin-bottom:30px; }
+  .badge.live { border-color:#8fc98d; color:#c7ebc6; }
+  .badge.demo { border-color:#d9a24a; color:#f0cf94; }
+
+  .plaque {
+    width: 340px;
+    background: var(--panel);
+    border-radius: 16px;
+    padding: 30px 26px;
+    box-shadow: 0 24px 60px rgba(0,0,0,0.4);
+  }
+  .weather-row { display:flex; align-items:center; justify-content:center; gap:14px; margin-bottom:18px; }
+  .weather-icon { font-size: 30px; }
+  .temp { font-size: 22px; font-weight:500; }
+  .suggestion { font-size: 21px; font-weight:500; line-height:1.4; min-height: 90px; display:flex; align-items:center; justify-content:center; }
+  .meta { font-size:12.5px; color:var(--ink-dim); margin-top:14px; }
+  footer { margin-top:26px; font-size:11.5px; color:rgba(255,255,255,0.45); max-width:340px; }
+</style>
+</head>
+<body>
+<div class="stage">
+  <div class="tag">Street Interface · Prototype C</div>
+  <div class="badge" id="badge">Connecting…</div>
+
+  <div class="plaque">
+    <div class="weather-row">
+      <span class="weather-icon" id="wIcon">—</span>
+      <span class="temp" id="wTemp">—°F</span>
+    </div>
+    <div class="suggestion" id="suggestion">Working it out…</div>
+    <div class="meta" id="meta">Route 42 · 34th &amp; Walnut St</div>
+  </div>
+
+  <footer>One line that combines weather and bus timing to help you decide — duck for cover, grab a coffee, or head out now.</footer>
+</div>
+
+<script>
+  const ROUTE = '42';
+  const STOP = { lat: 39.9527, lng: -75.1932 };
+  const AVG_SPEED_KMH = 14;
+  const POLL_MS = 20000;
+
+  const badgeEl = document.getElementById('badge');
+  const wIcon = document.getElementById('wIcon');
+  const wTemp = document.getElementById('wTemp');
+  const suggestionEl = document.getElementById('suggestion');
+  const metaEl = document.getElementById('meta');
+  const body = document.body;
+
+  function haversineKm(lat1, lon1, lat2, lon2){
+    const R = 6371, toRad = d => d * Math.PI / 180;
+    const dLat = toRad(lat2-lat1), dLon = toRad(lon2-lon1);
+    const a = Math.sin(dLat/2)**2 + Math.cos(toRad(lat1))*Math.cos(toRad(lat2))*Math.sin(dLon/2)**2;
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  }
+
+  function decodeWeather(code){
+    if ([0].includes(code)) return { icon:'☀️', label:'Clear', wet:false, bg:'#4a7fb8' };
+    if ([1,2,3].includes(code)) return { icon:'⛅', label:'Cloudy', wet:false, bg:'#5b7691' };
+    if ([45,48].includes(code)) return { icon:'🌫️', label:'Foggy', wet:false, bg:'#4c545e' };
+    if ([51,53,55,56,57,61,63,65,66,67,80,81,82].includes(code)) return { icon:'🌧️', label:'Rain', wet:true, bg:'#39434f' };
+    if ([71,73,75,77,85,86].includes(code)) return { icon:'❄️', label:'Snow', wet:true, bg:'#5c6a78' };
+    if ([95,96,99].includes(code)) return { icon:'⛈️', label:'Storm', wet:true, bg:'#2f3540' };
+    return { icon:'🌤️', label:'Mild', wet:false, bg:'#4a7fb8' };
+  }
+
+  async function fetchWeather(){
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${STOP.lat}&longitude=${STOP.lng}&current=temperature_2m,precipitation,weather_code&temperature_unit=fahrenheit`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error('weather http ' + res.status);
+    const data = await res.json();
+    return {
+      temp: Math.round(data.current.temperature_2m),
+      code: data.current.weather_code,
+      precip: data.current.precipitation
+    };
+  }
+
+  async function fetchBusMinutes(){
+    const res = await fetch(`/api/septa?route=${ROUTE}`, { cache:'no-store' });
+    if (!res.ok) throw new Error('bus http ' + res.status);
+    const data = await res.json();
+    const buses = data.bus || [];
+    if (!buses.length) return null;
+    let best = null, bestDist = Infinity;
+    buses.forEach(b => {
+      const d = haversineKm(parseFloat(b.lat), parseFloat(b.lng), STOP.lat, STOP.lng);
+      if (d < bestDist){ bestDist = d; best = b; }
+    });
+    return Math.max(0, (bestDist / AVG_SPEED_KMH) * 60);
+  }
+
+  function suggest(minutes, weather){
+    if (minutes === null){
+      return weather.wet
+        ? "No buses tracking right now — stay dry and check back soon."
+        : "No buses tracking right now — good time for a short walk instead.";
+    }
+    if (minutes <= 2){
+      return weather.wet
+        ? "Bus is almost here — keep that umbrella up a little longer."
+        : "Bus is almost here — head out now.";
+    }
+    if (weather.wet){
+      return minutes <= 6
+        ? `Raining, bus in ${minutes.toFixed(0)} min — worth waiting under cover.`
+        : `Raining and ${minutes.toFixed(0)} min to go — maybe duck into a café nearby.`;
+    }
+    if (minutes >= 10){
+      return `Bus in ${minutes.toFixed(0)} min — plenty of time for a coffee across the street.`;
+    }
+    return `Bus in ${minutes.toFixed(0)} min — a good time to head toward the stop.`;
+  }
+
+  let demoMinutes = 11, demoDir = -1;
+
+  async function refresh(){
+    let weather, minutes, demo = false;
+    try {
+      weather = await fetchWeather();
+    } catch (err) {
+      weather = { temp: 58, code: 2, precip: 0 };
+      demo = true;
+    }
+    try {
+      minutes = await fetchBusMinutes();
+      if (minutes === null) demo = demo || false;
+    } catch (err) {
+      demo = true;
+      demoMinutes += demoDir * 0.8;
+      if (demoMinutes <= 0){ demoMinutes = 0; demoDir = 1; }
+      if (demoMinutes >= 11){ demoMinutes = 11; demoDir = -1; }
+      minutes = demoMinutes;
+    }
+
+    const w = decodeWeather(weather.code);
+    wIcon.textContent = w.icon;
+    wTemp.textContent = weather.temp + '°F · ' + w.label;
+    body.style.background = `linear-gradient(180deg, ${w.bg} 0%, #16191d 78%)`;
+    suggestionEl.textContent = suggest(minutes, w) + (demo ? ' (demo)' : '');
+    metaEl.textContent = `Route ${ROUTE} · 34th & Walnut St`;
+    badgeEl.textContent = demo ? 'Demo data — live feed unavailable' : 'Live SEPTA + Open-Meteo data';
+    badgeEl.className = 'badge ' + (demo ? 'demo' : 'live');
+  }
+
+  refresh();
+  setInterval(refresh, POLL_MS);
+</script>
+</body>
+</html>
