@@ -31,11 +31,6 @@
     box-shadow: 0 20px 60px rgba(0,0,0,0.5);
     position: relative;
   }
-  .sign::before{
-    content:'';
-    position:absolute; top:-46px; left:50%; transform:translateX(-50%);
-    width:8px; height:50px; background:#3a3c40; border-radius:4px;
-  }
   .light {
     width: 46px; height: 46px; border-radius: 50%;
     background: var(--glow);
@@ -102,7 +97,6 @@
   const aiBtn = document.getElementById('aiBtn');
   const root = document.documentElement;
 
-  // latest known values, so the AI button can use them when clicked
   let lastMinutes = null;
   let lastLateMin = 0;
   let defaultSub = '';
@@ -143,7 +137,6 @@
     subEl.textContent = sub;
     subEl.className = 'sub';
 
-    // Only offer the AI explanation when there's an actual delay worth explaining
     aiBtn.style.display = (lateMin >= 3 && minutes !== null) ? 'inline-block' : 'none';
     aiBtn.disabled = false;
     aiBtn.textContent = 'Ask AI why ✦';
@@ -185,7 +178,6 @@
   poll();
   setInterval(poll, POLL_MS);
 
-  // --- AI button: manual trigger, so YOU control exactly when it costs money ---
   aiBtn.addEventListener('click', async () => {
     aiBtn.disabled = true;
     aiBtn.textContent = 'Thinking…';
